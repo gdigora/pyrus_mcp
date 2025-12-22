@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.1] - 2025-12-22
+
+### Added
+- Claude Desktop configuration updated with Pyrus MCP server
+- Version command for release management (`.claude/commands/version.md`)
+
+### Fixed
+- Fixed MCP import path (`mcp.server.fastmcp.FastMCP`)
+- Fixed error checking for API responses (check truthy `error_code`)
+- Fixed `get_profile` response parsing (use direct attributes instead of nested object)
+- Fixed `get_announcements` parsing (workaround for pyrus-api library bug)
+
 ## [0.0.0] - 2025-12-22
 
 ### Added

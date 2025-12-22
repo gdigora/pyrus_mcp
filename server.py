@@ -16,7 +16,7 @@ Usage with Claude Desktop:
     }
 """
 
-VERSION = "0.0.0"
+VERSION = "0.0.1"
 
 import json
 import logging
