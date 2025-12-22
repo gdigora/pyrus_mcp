@@ -16,7 +16,7 @@ Usage with Claude Desktop:
     }
 """
 
-VERSION = "0.0.1"
+VERSION = "0.0.2"
 
 import json
 import logging
@@ -446,27 +446,126 @@ def comment_task(
     text: str | None = None,
     action: str | None = None,
     reassign_to: str | None = None,
+    # List management
+    added_list_ids: list[int] | None = None,
+    removed_list_ids: list[int] | None = None,
+    # Scheduling
+    scheduled_date: str | None = None,
+    cancel_schedule: bool | None = None,
+    # Due dates
+    due_date: str | None = None,
+    due: str | None = None,
+    duration: int | None = None,
+    cancel_due: bool | None = None,
+    # Task metadata
+    subject: str | None = None,
+    spent_minutes: int | None = None,
+    # People management
+    subscribers_added: list[str] | None = None,
+    subscribers_removed: list[str] | None = None,
+    participants_added: list[str] | None = None,
+    participants_removed: list[str] | None = None,
+    # Form task approvals
+    approval_choice: str | None = None,
+    field_updates: list[dict] | None = None,
+    # Options
+    skip_notification: bool | None = None,
     account: str | None = None,
 ) -> dict:
     """
-    Add a comment to a task or perform an action.
+    Add a comment to a task or perform an action. This is the main tool for modifying tasks.
 
     Args:
         task_id: The ID of the task.
-        text: Comment text (optional if action is provided).
+        text: Comment text (optional).
         action: Action to perform: 'finished' or 'reopened' (optional).
         reassign_to: Email or ID of person to reassign to (optional).
+
+        # List Management (use get_lists to find list IDs):
+        added_list_ids: List IDs to add the task to (e.g., [123, 456]).
+        removed_list_ids: List IDs to remove the task from.
+
+        # Scheduling (moves task to calendar):
+        scheduled_date: Schedule date in YYYY-MM-DD format.
+        cancel_schedule: Set True to cancel schedule and move task to inbox.
+
+        # Due Dates:
+        due_date: Due date in YYYY-MM-DD format (date only).
+        due: Due datetime in YYYY-MM-DDTHH:MM format (date and time).
+        duration: Duration in minutes (only with 'due', for calendar events).
+        cancel_due: Set True to remove due date.
+
+        # Task Metadata:
+        subject: Change task subject/title.
+        spent_minutes: Log time spent in minutes.
+
+        # People Management (use email or person ID):
+        subscribers_added: List of emails/IDs to add as subscribers.
+        subscribers_removed: List of emails/IDs to remove from subscribers.
+        participants_added: List of emails/IDs to add as participants (simple tasks).
+        participants_removed: List of emails/IDs to remove from participants.
+
+        # Form Task Approvals:
+        approval_choice: 'approved', 'rejected', or 'acknowledged'.
+        field_updates: List of field updates [{"id": 123, "value": "new value"}].
+
+        # Options:
+        skip_notification: Set True to skip sending notifications.
         account: Account key (optional, uses default if not specified).
 
     Returns:
         The updated task with all comments.
+
+    Examples:
+        Add task to list: comment_task(123, added_list_ids=[456])
+        Schedule for tomorrow: comment_task(123, scheduled_date="2024-01-15")
+        Set due date with time: comment_task(123, due="2024-01-15T14:00")
+        Log time: comment_task(123, text="Fixed the bug", spent_minutes=30)
+        Approve form task: comment_task(123, approval_choice="approved")
     """
     pyrus = get_client(account)
+
+    # Parse dates
+    scheduled_dt = None
+    if scheduled_date:
+        scheduled_dt = datetime.strptime(scheduled_date, "%Y-%m-%d")
+
+    due_date_dt = None
+    if due_date:
+        due_date_dt = datetime.strptime(due_date, "%Y-%m-%d")
+
+    due_dt = None
+    if due:
+        due_dt = datetime.strptime(due, "%Y-%m-%dT%H:%M")
 
     request = req.TaskCommentRequest(
         text=text,
         action=action,
         reassign_to=reassign_to,
+        # List management
+        added_list_ids=added_list_ids,
+        removed_list_ids=removed_list_ids,
+        # Scheduling
+        scheduled_date=scheduled_dt,
+        cancel_schedule=cancel_schedule,
+        # Due dates
+        due_date=due_date_dt,
+        due=due_dt,
+        duration=duration,
+        cancel_due=cancel_due,
+        # Task metadata
+        subject=subject,
+        spent_minutes=spent_minutes,
+        # People management
+        subscribers_added=subscribers_added,
+        subscribers_removed=subscribers_removed,
+        participants_added=participants_added,
+        participants_removed=participants_removed,
+        # Form task approvals
+        approval_choice=approval_choice,
+        field_updates=field_updates,
+        # Options
+        skip_notification=skip_notification,
     )
 
     response = pyrus.comment_task(task_id, request)

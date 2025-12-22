@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.2] - 2025-12-23
+
+### Added
+- Enhanced `comment_task` with 18 new parameters for comprehensive task management:
+  - **List management**: `added_list_ids`, `removed_list_ids` - add/remove tasks from lists
+  - **Scheduling**: `scheduled_date`, `cancel_schedule` - schedule tasks to calendar
+  - **Due dates**: `due_date`, `due`, `duration`, `cancel_due` - manage deadlines
+  - **Task metadata**: `subject`, `spent_minutes` - update title and log time
+  - **People management**: `subscribers_added`, `subscribers_removed`, `participants_added`, `participants_removed`
+  - **Form approvals**: `approval_choice`, `field_updates` - approve/reject and update form fields
+  - **Options**: `skip_notification` - control notifications
+
+### Fixed
+- Closed GitHub issue #1: Users can now add tasks to lists via `comment_task(task_id, added_list_ids=[list_id])`
+
 ## [0.0.1] - 2025-12-22
 
 ### Added
