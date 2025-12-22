@@ -1,0 +1,17 @@
+{
+  "accounts": {
+    "work": {
+      "name": "Work Pyrus",
+      "description": "Work project management - use for work-related tasks",
+      "login": "your.email@company.com",
+      "security_key": "your-security-key-from-pyrus-profile"
+    },
+    "personal": {
+      "name": "Personal Pyrus",
+      "description": "Personal task tracking",
+      "login": "personal@email.com",
+      "security_key": "another-security-key"
+    }
+  },
+  "default_account": "work"
+}
