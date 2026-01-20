@@ -166,18 +166,36 @@ def format_task(task) -> dict:
     if task.fields:
         result["fields"] = [format_field(f) for f in task.fields]
 
+    # Add attachments if available
+    if hasattr(task, "attachments") and task.attachments:
+        result["attachments"] = [format_file(f) for f in task.attachments]
+
     return result
+
+
+def format_file(file) -> dict:
+    """Format File attachment to dict."""
+    return {
+        "id": file.id,
+        "name": file.name,
+        "size": file.size,
+        "md5": file.md5,
+        "url": file.url,
+    }
 
 
 def format_comment(comment) -> dict:
     """Format TaskComment to dict."""
-    return {
+    result = {
         "id": comment.id,
         "text": comment.text,
         "author": format_person(comment.author),
         "create_date": str(comment.create_date) if comment.create_date else None,
         "action": comment.action,
     }
+    if hasattr(comment, "attachments") and comment.attachments:
+        result["attachments"] = [format_file(f) for f in comment.attachments]
+    return result
 
 
 def format_field(field) -> dict:
@@ -941,7 +959,7 @@ def get_list_tasks(list_id: int, limit: int = 200, account: str | None = None) -
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
 
-    return [format_task(t) for t in response.tasks] if response.tasks else []
+    return [format_task_header(t) for t in response.tasks] if response.tasks else []
 
 
 # =============================================================================
@@ -972,6 +990,38 @@ def get_catalog(catalog_id: int, account: str | None = None) -> dict:
         "name": response.name,
         "headers": response.catalog_headers,
         "items": [format_catalog_item(i) for i in response.items] if response.items else [],
+    }
+
+
+# =============================================================================
+# MCP Tools - Files
+# =============================================================================
+
+
+@mcp.tool()
+def download_file(file_id: int, account: str | None = None) -> dict:
+    """
+    Download a file attachment from Pyrus.
+
+    Args:
+        file_id: The ID of the file to download (from task/comment attachments).
+        account: Account key (optional, uses default if not specified).
+
+    Returns:
+        File metadata and base64-encoded content.
+    """
+    import base64
+
+    pyrus = get_client(account)
+    response = pyrus.download_file(file_id)
+
+    if hasattr(response, "error_code") and response.error_code:
+        raise RuntimeError(f"API error: {response.error_code}")
+
+    return {
+        "filename": response.filename,
+        "content_base64": base64.b64encode(response.raw_file).decode("utf-8"),
+        "size": len(response.raw_file),
     }
 
 

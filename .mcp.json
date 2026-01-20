@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "pyrus": {
+      "type": "stdio",
+      "command": "/Users/digora/Documents/Documents_cloud/Work/pyrus_api_mcp/.venv/bin/python",
+      "args": ["/Users/digora/Documents/Documents_cloud/Work/pyrus_api_mcp/server.py"]
+    }
+  }
+}
