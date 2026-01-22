@@ -181,6 +181,8 @@ def format_file(file) -> dict:
         "size": file.size,
         "md5": file.md5,
         "url": file.url,
+        "version": getattr(file, "version", None),
+        "root_id": getattr(file, "root_id", None),
     }
 
 
@@ -419,6 +421,7 @@ def create_task(
     responsible: str | None = None,
     due_date: str | None = None,
     participants: list[str] | None = None,
+    attachments: list[dict] | None = None,
     account: str | None = None,
 ) -> dict:
     """
@@ -430,11 +433,16 @@ def create_task(
         responsible: Email or ID of person responsible (optional).
         due_date: Due date in YYYY-MM-DD format (optional).
         participants: List of participant emails or IDs (optional).
+        attachments: List of file attachments (use upload_file first to get guid).
+                     Each dict can have: 'guid' (from upload_file), 'root_id' (for versioning),
+                     'attachment_id' (existing file), 'url', 'name'.
         account: Account key (optional, uses default if not specified).
 
     Returns:
         The created task.
     """
+    from pyrus.models import entities
+
     pyrus = get_client(account)
 
     # Parse due date if provided
@@ -442,12 +450,31 @@ def create_task(
     if due_date:
         due_dt = datetime.strptime(due_date, "%Y-%m-%d")
 
+    # Build attachment objects if provided
+    attachment_objects = None
+    if attachments:
+        attachment_objects = []
+        for att in attachments:
+            new_file = entities.NewFile()
+            if "guid" in att:
+                new_file.guid = att["guid"]
+            if "root_id" in att:
+                new_file.root_id = att["root_id"]
+            if "attachment_id" in att:
+                new_file.attachment_id = att["attachment_id"]
+            if "url" in att:
+                new_file.url = att["url"]
+            if "name" in att:
+                new_file.name = att["name"]
+            attachment_objects.append(new_file)
+
     request = req.CreateTaskRequest(
         text=text,
         subject=subject,
         responsible=responsible,
         due_date=due_dt,
         participants=participants,
+        attachments=attachment_objects,
     )
 
     response = pyrus.create_task(request)
@@ -486,6 +513,8 @@ def comment_task(
     # Form task approvals
     approval_choice: str | None = None,
     field_updates: list[dict] | None = None,
+    # File attachments
+    attachments: list[dict] | None = None,
     # Options
     skip_notification: bool | None = None,
     account: str | None = None,
@@ -527,6 +556,11 @@ def comment_task(
         approval_choice: 'approved', 'rejected', or 'acknowledged'.
         field_updates: List of field updates [{"id": 123, "value": "new value"}].
 
+        # File Attachments (use upload_file first to get guid):
+        attachments: List of file attachments. Each dict can have:
+                     'guid' (from upload_file), 'root_id' (for versioning),
+                     'attachment_id' (existing file), 'url', 'name'.
+
         # Options:
         skip_notification: Set True to skip sending notifications.
         account: Account key (optional, uses default if not specified).
@@ -540,7 +574,10 @@ def comment_task(
         Set due date with time: comment_task(123, due="2024-01-15T14:00")
         Log time: comment_task(123, text="Fixed the bug", spent_minutes=30)
         Approve form task: comment_task(123, approval_choice="approved")
+        Attach file: comment_task(123, attachments=[{"guid": "abc-123"}])
     """
+    from pyrus.models import entities
+
     pyrus = get_client(account)
 
     # Parse dates
@@ -555,6 +592,24 @@ def comment_task(
     due_dt = None
     if due:
         due_dt = datetime.strptime(due, "%Y-%m-%dT%H:%M")
+
+    # Build attachment objects if provided
+    attachment_objects = None
+    if attachments:
+        attachment_objects = []
+        for att in attachments:
+            new_file = entities.NewFile()
+            if "guid" in att:
+                new_file.guid = att["guid"]
+            if "root_id" in att:
+                new_file.root_id = att["root_id"]
+            if "attachment_id" in att:
+                new_file.attachment_id = att["attachment_id"]
+            if "url" in att:
+                new_file.url = att["url"]
+            if "name" in att:
+                new_file.name = att["name"]
+            attachment_objects.append(new_file)
 
     request = req.TaskCommentRequest(
         text=text,
@@ -582,6 +637,8 @@ def comment_task(
         # Form task approvals
         approval_choice=approval_choice,
         field_updates=field_updates,
+        # File attachments
+        attachments=attachment_objects,
         # Options
         skip_notification=skip_notification,
     )
@@ -1023,6 +1080,132 @@ def download_file(file_id: int, account: str | None = None) -> dict:
         "content_base64": base64.b64encode(response.raw_file).decode("utf-8"),
         "size": len(response.raw_file),
     }
+
+
+@mcp.tool()
+def upload_file(file_path: str, root_id: int | None = None, account: str | None = None) -> dict:
+    """
+    Upload a file to Pyrus for attachment to tasks.
+
+    Args:
+        file_path: Path to the file to upload.
+        root_id: If provided, creates a new version of existing file.
+        account: Account key (optional, uses default if not specified).
+
+    Returns:
+        Upload result with guid for use in attachments.
+    """
+    pyrus = get_client(account)
+    response = pyrus.upload_file(file_path)
+
+    if hasattr(response, "error_code") and response.error_code:
+        raise RuntimeError(f"API error: {response.error_code}")
+
+    return {
+        "guid": response.guid,
+        "md5_hash": response.md5_hash,
+        "root_id": root_id,  # Pass through for reference
+    }
+
+
+@mcp.tool()
+def upload_file_content(
+    content_base64: str,
+    filename: str,
+    account: str | None = None,
+) -> dict:
+    """
+    Upload file content directly to Pyrus (without file path).
+
+    Args:
+        content_base64: Base64-encoded file content.
+        filename: Name for the uploaded file (e.g., 'report.pdf').
+        account: Account key (optional, uses default if not specified).
+
+    Returns:
+        Upload result with guid for use in attachments.
+    """
+    import base64
+    import io
+
+    import requests
+
+    pyrus = get_client(account)
+
+    # Decode base64 content
+    content = base64.b64decode(content_base64)
+
+    # Create file-like object
+    file_obj = io.BytesIO(content)
+
+    # Make direct API request (bypassing pyrus-api library)
+    url = "https://api.pyrus.com/v4/files/upload"
+    headers = {"Authorization": f"Bearer {pyrus.access_token}"}
+    files = {"file": (filename, file_obj)}
+
+    response = requests.post(url, headers=headers, files=files)
+    response.raise_for_status()
+
+    data = response.json()
+    if "error_code" in data:
+        raise RuntimeError(f"API error: {data['error_code']}")
+
+    return {
+        "guid": data["guid"],
+        "md5_hash": data["md5_hash"],
+    }
+
+
+@mcp.tool()
+def attach_file_to_task(
+    task_id: int,
+    file_path: str | None = None,
+    content_base64: str | None = None,
+    filename: str | None = None,
+    text: str | None = None,
+    root_id: int | None = None,
+    account: str | None = None,
+) -> dict:
+    """
+    Upload and attach a file to a task in one action.
+
+    Args:
+        task_id: The task to attach the file to.
+        file_path: Path to file (use this OR content_base64).
+        content_base64: Base64-encoded file content (use this OR file_path).
+        filename: Required when using content_base64.
+        text: Optional comment text.
+        root_id: If provided, creates new version of existing file.
+        account: Account key (optional, uses default if not specified).
+
+    Returns:
+        The updated task with the new attachment.
+    """
+    # Validate: exactly one of file_path or content_base64 must be provided
+    if file_path and content_base64:
+        raise ValueError("Provide either file_path or content_base64, not both")
+    if not file_path and not content_base64:
+        raise ValueError("Must provide either file_path or content_base64")
+    if content_base64 and not filename:
+        raise ValueError("filename is required when using content_base64")
+
+    # Step 1: Upload
+    if file_path:
+        upload_result = upload_file(file_path, root_id, account)
+    else:
+        upload_result = upload_file_content(content_base64, filename, account)
+
+    # Step 2: Attach via comment
+    attachment = {"guid": upload_result["guid"]}
+    if root_id:
+        attachment["root_id"] = root_id
+
+    return comment_task(
+        task_id=task_id,
+        text=text,
+        attachments=[attachment],
+        account=account,
+    )
 
 
 # =============================================================================
