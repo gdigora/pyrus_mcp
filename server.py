@@ -1070,10 +1070,10 @@ def download_file(
         account: Account key (optional, uses default if not specified).
 
     Returns:
-        Dict with keys: status, filename, saved_to, size.
+        Dict with keys: status, filename, saved_to, size, and optionally warning.
 
     Raises:
-        RuntimeError: If the Pyrus API returns an error or file write fails.
+        RuntimeError: If Pyrus API returns error, no file data, or file write fails.
         ValueError: If save_dir exists but is not a directory.
 
     Notes:
@@ -1081,19 +1081,18 @@ def download_file(
         Overwrites existing files with the same name.
         If API returns no filename, uses 'file_{file_id}' as fallback.
         Sanitizes filename to prevent path traversal attacks.
+        Zero-byte files are saved with a warning in the response.
     """
     if save_dir is None:
         save_dir = str(Path.home() / "Downloads")
 
     save_path = Path(save_dir)
 
-    # Create directory atomically, handling race conditions
+    # Create directory if needed. exist_ok=True handles concurrent creation gracefully.
+    # Note: mkdir with exist_ok=True only raises PermissionError/OSError, not FileExistsError.
+    # The is_dir() check below handles the case where a FILE exists at save_path.
     try:
         save_path.mkdir(parents=True, exist_ok=True)
-    except FileExistsError:
-        # Race condition: something created a file at this path between checks
-        if not save_path.is_dir():
-            raise ValueError(f"Cannot save file: '{save_dir}' exists but is not a directory")
     except PermissionError:
         raise RuntimeError(
             f"Cannot create directory '{save_dir}': permission denied. "
@@ -1116,10 +1115,16 @@ def download_file(
     if not hasattr(response, "raw_file") or response.raw_file is None:
         raise RuntimeError(f"API returned no file data for file_id {file_id}")
 
+    # Track warnings to surface to user (not just log file)
+    # Critical: Users need to know when something is wrong, not just see "success"
+    warning = None
+
     if len(response.raw_file) == 0:
+        warning = "File has 0 bytes - may be empty or corrupted on server"
         logger.warning(f"File {file_id} has 0 bytes - this may indicate an issue")
 
-    # Sanitize filename to prevent path traversal attacks
+    # Sanitize filename to prevent path traversal attacks (e.g., "../../etc/passwd")
+    # Path.name extracts only the filename component, stripping any directory parts
     if hasattr(response, "filename") and response.filename:
         safe_filename = Path(response.filename).name
         if not safe_filename:
@@ -1149,12 +1154,17 @@ def download_file(
 
     logger.info(f"Downloaded file {file_id} ({len(response.raw_file)} bytes) to {file_path}")
 
-    return {
+    result = {
         "status": "downloaded",
         "filename": safe_filename,
         "saved_to": str(file_path),
         "size": len(response.raw_file),
     }
+    # Include warning in response so users are informed of potential issues
+    # (don't just log to file where they'll never see it)
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 @mcp.tool()
