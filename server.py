@@ -1079,18 +1079,32 @@ def download_file(
     Notes:
         Creates save_dir if it does not exist.
         Overwrites existing files with the same name.
+        If API returns no filename, uses 'file_{file_id}' as fallback.
+        Sanitizes filename to prevent path traversal attacks.
     """
     if save_dir is None:
         save_dir = str(Path.home() / "Downloads")
 
     save_path = Path(save_dir)
 
-    # Validate save_dir is a directory, not a file
-    if save_path.exists() and not save_path.is_dir():
-        raise ValueError(f"Cannot save file: '{save_dir}' exists but is not a directory")
-
-    if not save_path.exists():
+    # Create directory atomically, handling race conditions
+    try:
         save_path.mkdir(parents=True, exist_ok=True)
+    except FileExistsError:
+        # Race condition: something created a file at this path between checks
+        if not save_path.is_dir():
+            raise ValueError(f"Cannot save file: '{save_dir}' exists but is not a directory")
+    except PermissionError:
+        raise RuntimeError(
+            f"Cannot create directory '{save_dir}': permission denied. "
+            "Please check permissions or choose a different save location."
+        )
+    except OSError as e:
+        raise RuntimeError(f"Cannot create directory '{save_dir}': {e}")
+
+    # Final validation that we have a directory
+    if not save_path.is_dir():
+        raise ValueError(f"Cannot save file: '{save_dir}' exists but is not a directory")
 
     pyrus = get_client(account)
     response = pyrus.download_file(file_id)
@@ -1098,9 +1112,21 @@ def download_file(
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
 
+    # Validate response contains file data
+    if not hasattr(response, "raw_file") or response.raw_file is None:
+        raise RuntimeError(f"API returned no file data for file_id {file_id}")
+
+    if len(response.raw_file) == 0:
+        logger.warning(f"File {file_id} has 0 bytes - this may indicate an issue")
+
     # Sanitize filename to prevent path traversal attacks
-    safe_filename = Path(response.filename).name if response.filename else None
-    if not safe_filename:
+    if hasattr(response, "filename") and response.filename:
+        safe_filename = Path(response.filename).name
+        if not safe_filename:
+            logger.warning(f"File {file_id} has invalid filename '{response.filename}', using fallback")
+            safe_filename = f"file_{file_id}"
+    else:
+        logger.warning(f"File {file_id} has no filename from API, using fallback")
         safe_filename = f"file_{file_id}"
 
     file_path = save_path / safe_filename
@@ -1112,12 +1138,14 @@ def download_file(
         raise RuntimeError(f"Cannot write file '{file_path}': permission denied")
     except OSError as e:
         # Clean up partial file if it exists
+        cleanup_warning = ""
         if file_path.exists():
             try:
                 file_path.unlink()
-            except OSError:
-                pass
-        raise RuntimeError(f"Failed to write file to '{file_path}': {e}")
+            except OSError as cleanup_error:
+                cleanup_warning = f" (warning: partial file may remain: {cleanup_error})"
+                logger.warning(f"Failed to clean up partial file '{file_path}': {cleanup_error}")
+        raise RuntimeError(f"Failed to write file to '{file_path}': {e}{cleanup_warning}")
 
     logger.info(f"Downloaded file {file_id} ({len(response.raw_file)} bytes) to {file_path}")
 
