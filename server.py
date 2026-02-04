@@ -1070,12 +1070,25 @@ def download_file(
         account: Account key (optional, uses default if not specified).
 
     Returns:
-        Dict with saved file path, filename, and size.
+        Dict with keys: status, filename, saved_to, size.
+
+    Raises:
+        RuntimeError: If the Pyrus API returns an error or file write fails.
+        ValueError: If save_dir exists but is not a directory.
+
+    Notes:
+        Creates save_dir if it does not exist.
+        Overwrites existing files with the same name.
     """
     if save_dir is None:
         save_dir = str(Path.home() / "Downloads")
 
     save_path = Path(save_dir)
+
+    # Validate save_dir is a directory, not a file
+    if save_path.exists() and not save_path.is_dir():
+        raise ValueError(f"Cannot save file: '{save_dir}' exists but is not a directory")
+
     if not save_path.exists():
         save_path.mkdir(parents=True, exist_ok=True)
 
@@ -1085,13 +1098,32 @@ def download_file(
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
 
-    file_path = save_path / response.filename
-    with open(file_path, "wb") as f:
-        f.write(response.raw_file)
+    # Sanitize filename to prevent path traversal attacks
+    safe_filename = Path(response.filename).name if response.filename else None
+    if not safe_filename:
+        safe_filename = f"file_{file_id}"
+
+    file_path = save_path / safe_filename
+
+    try:
+        with open(file_path, "wb") as f:
+            f.write(response.raw_file)
+    except PermissionError:
+        raise RuntimeError(f"Cannot write file '{file_path}': permission denied")
+    except OSError as e:
+        # Clean up partial file if it exists
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except OSError:
+                pass
+        raise RuntimeError(f"Failed to write file to '{file_path}': {e}")
+
+    logger.info(f"Downloaded file {file_id} ({len(response.raw_file)} bytes) to {file_path}")
 
     return {
         "status": "downloaded",
-        "filename": response.filename,
+        "filename": safe_filename,
         "saved_to": str(file_path),
         "size": len(response.raw_file),
     }
