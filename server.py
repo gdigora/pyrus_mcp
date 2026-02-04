@@ -1056,18 +1056,54 @@ def get_catalog(catalog_id: int, account: str | None = None) -> dict:
 
 
 @mcp.tool()
-def download_file(file_id: int, account: str | None = None) -> dict:
+def download_file(
+    file_id: int,
+    save_dir: str | None = None,
+    account: str | None = None,
+) -> dict:
     """
-    Download a file attachment from Pyrus.
+    Download a file attachment from Pyrus to disk.
 
     Args:
         file_id: The ID of the file to download (from task/comment attachments).
+        save_dir: Directory to save the file (default: ~/Downloads).
         account: Account key (optional, uses default if not specified).
 
     Returns:
-        File metadata and base64-encoded content.
+        Dict with keys: status, filename, saved_to, size, and optionally warning.
+
+    Raises:
+        RuntimeError: If Pyrus API returns error, no file data, or file write fails.
+        ValueError: If save_dir exists but is not a directory.
+
+    Notes:
+        Creates save_dir if it does not exist.
+        Overwrites existing files with the same name.
+        If API returns no filename, uses 'file_{file_id}' as fallback.
+        Sanitizes filename to prevent path traversal attacks.
+        Zero-byte files are saved with a warning in the response.
     """
-    import base64
+    if save_dir is None:
+        save_dir = str(Path.home() / "Downloads")
+
+    save_path = Path(save_dir)
+
+    # Create directory if needed. exist_ok=True handles concurrent creation gracefully.
+    # Note: mkdir with exist_ok=True only raises PermissionError/OSError, not FileExistsError.
+    # The is_dir() check below handles the case where a FILE exists at save_path.
+    try:
+        save_path.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        raise RuntimeError(
+            f"Cannot create directory '{save_dir}': permission denied. "
+            "Please check permissions or choose a different save location."
+        )
+    except OSError as e:
+        raise RuntimeError(f"Cannot create directory '{save_dir}': {e}")
+
+    # Final validation that we have a directory
+    if not save_path.is_dir():
+        raise ValueError(f"Cannot save file: '{save_dir}' exists but is not a directory")
 
     pyrus = get_client(account)
     response = pyrus.download_file(file_id)
@@ -1075,11 +1111,60 @@ def download_file(file_id: int, account: str | None = None) -> dict:
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
 
-    return {
-        "filename": response.filename,
-        "content_base64": base64.b64encode(response.raw_file).decode("utf-8"),
+    # Validate response contains file data
+    if not hasattr(response, "raw_file") or response.raw_file is None:
+        raise RuntimeError(f"API returned no file data for file_id {file_id}")
+
+    # Track warnings to surface to user (not just log file)
+    # Critical: Users need to know when something is wrong, not just see "success"
+    warning = None
+
+    if len(response.raw_file) == 0:
+        warning = "File has 0 bytes - may be empty or corrupted on server"
+        logger.warning(f"File {file_id} has 0 bytes - this may indicate an issue")
+
+    # Sanitize filename to prevent path traversal attacks (e.g., "../../etc/passwd")
+    # Path.name extracts only the filename component, stripping any directory parts
+    if hasattr(response, "filename") and response.filename:
+        safe_filename = Path(response.filename).name
+        if not safe_filename:
+            logger.warning(f"File {file_id} has invalid filename '{response.filename}', using fallback")
+            safe_filename = f"file_{file_id}"
+    else:
+        logger.warning(f"File {file_id} has no filename from API, using fallback")
+        safe_filename = f"file_{file_id}"
+
+    file_path = save_path / safe_filename
+
+    try:
+        with open(file_path, "wb") as f:
+            f.write(response.raw_file)
+    except PermissionError:
+        raise RuntimeError(f"Cannot write file '{file_path}': permission denied")
+    except OSError as e:
+        # Clean up partial file if it exists
+        cleanup_warning = ""
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except OSError as cleanup_error:
+                cleanup_warning = f" (warning: partial file may remain: {cleanup_error})"
+                logger.warning(f"Failed to clean up partial file '{file_path}': {cleanup_error}")
+        raise RuntimeError(f"Failed to write file to '{file_path}': {e}{cleanup_warning}")
+
+    logger.info(f"Downloaded file {file_id} ({len(response.raw_file)} bytes) to {file_path}")
+
+    result = {
+        "status": "downloaded",
+        "filename": safe_filename,
+        "saved_to": str(file_path),
         "size": len(response.raw_file),
     }
+    # Include warning in response so users are informed of potential issues
+    # (don't just log to file where they'll never see it)
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 @mcp.tool()
