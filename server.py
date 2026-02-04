@@ -1056,18 +1056,28 @@ def get_catalog(catalog_id: int, account: str | None = None) -> dict:
 
 
 @mcp.tool()
-def download_file(file_id: int, account: str | None = None) -> dict:
+def download_file(
+    file_id: int,
+    save_dir: str | None = None,
+    account: str | None = None,
+) -> dict:
     """
-    Download a file attachment from Pyrus.
+    Download a file attachment from Pyrus to disk.
 
     Args:
         file_id: The ID of the file to download (from task/comment attachments).
+        save_dir: Directory to save the file (default: ~/Downloads).
         account: Account key (optional, uses default if not specified).
 
     Returns:
-        File metadata and base64-encoded content.
+        Dict with saved file path, filename, and size.
     """
-    import base64
+    if save_dir is None:
+        save_dir = str(Path.home() / "Downloads")
+
+    save_path = Path(save_dir)
+    if not save_path.exists():
+        save_path.mkdir(parents=True, exist_ok=True)
 
     pyrus = get_client(account)
     response = pyrus.download_file(file_id)
@@ -1075,9 +1085,14 @@ def download_file(file_id: int, account: str | None = None) -> dict:
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
 
+    file_path = save_path / response.filename
+    with open(file_path, "wb") as f:
+        f.write(response.raw_file)
+
     return {
+        "status": "downloaded",
         "filename": response.filename,
-        "content_base64": base64.b64encode(response.raw_file).decode("utf-8"),
+        "saved_to": str(file_path),
         "size": len(response.raw_file),
     }
 
