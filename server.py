@@ -24,6 +24,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from mcp.server.fastmcp import FastMCP
 from pyrus import client
@@ -1126,7 +1127,9 @@ def download_file(
     # Sanitize filename to prevent path traversal attacks (e.g., "../../etc/passwd")
     # Path.name extracts only the filename component, stripping any directory parts
     if hasattr(response, "filename") and response.filename:
-        safe_filename = Path(response.filename).name
+        # Decode URL-encoded filename (non-ASCII chars from HTTP Content-Disposition)
+        decoded_filename = unquote(response.filename).replace('+', ' ')
+        safe_filename = Path(decoded_filename).name
         if not safe_filename:
             logger.warning(f"File {file_id} has invalid filename '{response.filename}', using fallback")
             safe_filename = f"file_{file_id}"
