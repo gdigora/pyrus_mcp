@@ -20,7 +20,9 @@ VERSION = "0.0.2"
 
 import json
 import logging
+import os
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -1184,7 +1186,22 @@ def upload_file(file_path: str, root_id: int | None = None, account: str | None 
         Upload result with guid for use in attachments.
     """
     pyrus = get_client(account)
-    response = pyrus.upload_file(file_path)
+
+    # Validate file exists
+    file_path_obj = Path(file_path).expanduser()
+    if not file_path_obj.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    try:
+        response = pyrus.upload_file(str(file_path_obj))
+    except Exception as e:
+        error_msg = str(e)
+        if "Expecting value" in error_msg:
+            raise RuntimeError(
+                f"Upload failed: Pyrus returned an invalid response. "
+                f"This may indicate a server issue. Original error: {error_msg}"
+            )
+        raise
 
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
@@ -1214,34 +1231,52 @@ def upload_file_content(
         Upload result with guid for use in attachments.
     """
     import base64
-    import io
-
-    import requests
 
     pyrus = get_client(account)
 
     # Decode base64 content
-    content = base64.b64decode(content_base64)
+    try:
+        content = base64.b64decode(content_base64)
+    except Exception as e:
+        raise ValueError(f"Invalid base64 content: {e}")
 
-    # Create file-like object
-    file_obj = io.BytesIO(content)
+    # Sanitize filename for use in temp file path
+    safe_filename = Path(filename).name or "upload"
 
-    # Make direct API request (bypassing pyrus-api library)
-    url = "https://api.pyrus.com/v4/files/upload"
-    headers = {"Authorization": f"Bearer {pyrus.access_token}"}
-    files = {"file": (filename, file_obj)}
+    # Write to temp file and use pyrus-api library's upload
+    # This ensures correct URL and headers from authenticated client
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=f"_{safe_filename}",
+        prefix="pyrus_upload_"
+    ) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
 
-    response = requests.post(url, headers=headers, files=files)
-    response.raise_for_status()
+    try:
+        response = pyrus.upload_file(tmp_path)
 
-    data = response.json()
-    if "error_code" in data:
-        raise RuntimeError(f"API error: {data['error_code']}")
+        if hasattr(response, "error_code") and response.error_code:
+            raise RuntimeError(f"API error: {response.error_code}")
 
-    return {
-        "guid": data["guid"],
-        "md5_hash": data["md5_hash"],
-    }
+        return {
+            "guid": response.guid,
+            "md5_hash": response.md5_hash,
+        }
+    except Exception as e:
+        error_msg = str(e)
+        if "Expecting value" in error_msg:
+            raise RuntimeError(
+                f"Upload failed: Pyrus returned an invalid response. "
+                f"Original error: {error_msg}"
+            )
+        raise
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            logger.warning(f"Failed to clean up temp file: {tmp_path}")
 
 
 @mcp.tool()
