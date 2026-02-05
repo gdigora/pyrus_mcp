@@ -16,7 +16,7 @@ Usage with Claude Desktop:
     }
 """
 
-VERSION = "0.0.3"
+VERSION = "0.0.4"
 
 import json
 import logging
@@ -460,6 +460,9 @@ def get_task(task_id: int, account: str | None = None) -> dict:
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
 
+    if response.task is None:
+        raise RuntimeError(f"API returned empty response for task {task_id}")
+
     return format_task(response.task)
 
 
@@ -530,6 +533,9 @@ def create_task(
 
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
+
+    if response.task is None:
+        raise RuntimeError("API returned empty response when creating task")
 
     return format_task(response.task)
 
@@ -697,6 +703,9 @@ def comment_task(
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
 
+    if response.task is None:
+        raise RuntimeError(f"API returned empty response for task {task_id}")
+
     return format_task(response.task)
 
 
@@ -844,6 +853,9 @@ def create_form_task(
 
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
+
+    if response.task is None:
+        raise RuntimeError(f"API returned empty response when creating form task {form_id}")
 
     return format_task(response.task)
 
