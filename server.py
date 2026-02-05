@@ -1261,22 +1261,25 @@ def upload_file_content(
         Upload result with guid for use in attachments.
     """
     import base64
+    import binascii
     from json import JSONDecodeError
 
     pyrus = get_client(account)
 
     # Decode base64 content
+    # Catch only binascii.Error (what base64.b64decode raises for invalid input)
+    # to avoid masking unrelated errors like MemoryError for huge payloads
     try:
         content = base64.b64decode(content_base64)
-    except Exception as e:
+    except binascii.Error as e:
         raise ValueError(f"Invalid base64 content: {e}") from e
 
     # Sanitize filename to prevent path traversal, preserve original name
     # Using Path().name extracts just the filename without any directory components
     safe_filename = Path(filename).name or "upload"
 
-    # Use TemporaryDirectory so the file keeps its original name
-    # (pyrus-api may use the filename from the path when uploading)
+    # Use a temp directory (not NamedTemporaryFile) so the file keeps its original name
+    # (pyrus-api uses the filename from the path when uploading to Pyrus)
     tmp_dir = None
     tmp_path = None
     try:
@@ -1346,9 +1349,12 @@ def attach_file_to_task(
     if content_base64 and not filename:
         raise ValueError("filename is required when using content_base64")
 
-    # Step 1: Upload
+    # Step 1: Upload the file
+    # Note: root_id is NOT passed to upload_file() because pyrus-api library
+    # doesn't support file versioning. Instead, root_id is passed to comment_task()
+    # in the attachment dict (Step 2) where Pyrus API handles versioning.
     if file_path:
-        upload_result = upload_file(file_path, root_id, account)
+        upload_result = upload_file(file_path, account)
     else:
         upload_result = upload_file_content(content_base64, filename, account)
 
