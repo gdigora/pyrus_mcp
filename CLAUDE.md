@@ -23,22 +23,35 @@ pip install -r requirements.txt
 
 ## Architecture
 
-**Single-file MCP server** (`server.py`, ~900 lines):
+**Single-file MCP server** (`server.py`):
 - Uses `FastMCP` from `mcp.server.fastmcp` with stdio transport
 - Wraps `pyrus-api` library for Pyrus API calls
 - Logs to `pyrus_mcp.log` (stdout reserved for MCP protocol)
 
 **Key components:**
 - `load_accounts()` / `get_client(account)` - Multi-account management with lazy auth
+- `_upload_file_direct()` - Direct upload using pyrus-api token (workaround for pyrus-api bug)
 - `format_*()` functions - Convert Pyrus model objects to JSON-serializable dicts
-- `@mcp.tool()` decorated functions - 21 MCP tools exposed to Claude
+- `@mcp.tool()` decorated functions - MCP tools exposed to Claude
 
 **Configuration:**
 - `accounts.json` - Credentials (gitignored, use `accounts.json.example` as template)
 - Each account has: `name`, `description`, `login`, `security_key`
 - `default_account` specifies which to use when not specified
 
-**Known issue:** The `pyrus-api` library has a bug parsing announcements - `get_announcements()` uses `response.original_response` as workaround.
+## Dependencies
+
+- `pyrus-api` (upstream, simplygoodsoftware) — Pyrus API client library
+
+**Known pyrus-api bugs and workarounds:**
+
+1. **Announcement parsing** — `get_announcements()` uses `response.original_response` to access raw JSON
+2. **File uploads** — `_upload_file_direct()` uses pyrus-api token but makes direct HTTP request to correct `_files_host` endpoint (pyrus-api sends uploads to wrong host)
+
+**Updating pyrus-api:**
+```bash
+pip install --upgrade pyrus-api
+```
 
 ## Adding New Tools
 
