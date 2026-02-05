@@ -16,7 +16,7 @@ Usage with Claude Desktop:
     }
 """
 
-VERSION = "0.0.2"
+VERSION = "0.0.4"
 
 import json
 import logging
@@ -27,6 +27,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
+
+import requests as http_requests  # for direct upload API call
 
 from mcp.server.fastmcp import FastMCP
 from pyrus import client
@@ -120,6 +122,50 @@ def get_client(account: str | None = None) -> client.PyrusAPI:
     logger.info(f"Authenticated account: {account}")
     pyrus_clients[account] = pyrus_client
     return pyrus_client
+
+
+def _upload_file_direct(content: bytes, filename: str, account: str | None = None) -> dict:
+    """
+    Upload file using direct HTTP request with pyrus-api token.
+
+    The pyrus-api library has a bug where uploads go to wrong host.
+    This function uses the token and correct files_host from pyrus-api
+    to make the upload request directly.
+
+    Args:
+        content: File content as bytes.
+        filename: Filename for the upload.
+        account: Account key (optional).
+
+    Returns:
+        Dict with guid, md5_hash, filename.
+    """
+    pyrus = get_client(account)
+
+    # Use the files host from pyrus-api (set during auth, e.g., s-files.pyrus.com)
+    files_host = pyrus._files_host
+    upload_url = f"https://{files_host}/v4/files/upload"
+
+    headers = {"Authorization": f"Bearer {pyrus.access_token}"}
+    files = {"file": (filename, content, "application/octet-stream")}
+
+    logger.info(f"Uploading to {upload_url}")
+    response = http_requests.post(upload_url, headers=headers, files=files)
+
+    if response.status_code != 200:
+        logger.error(f"Upload failed: HTTP {response.status_code} - {response.text}")
+        raise RuntimeError(f"Upload failed: HTTP {response.status_code}")
+
+    result = response.json()
+    if not result.get("guid"):
+        logger.error(f"Upload failed: no guid in response - {result}")
+        raise RuntimeError("Upload failed: no guid in response")
+
+    return {
+        "guid": result["guid"],
+        "md5_hash": result.get("md5_hash"),
+        "filename": filename,
+    }
 
 
 # =============================================================================
@@ -414,6 +460,9 @@ def get_task(task_id: int, account: str | None = None) -> dict:
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
 
+    if response.task is None:
+        raise RuntimeError(f"API returned empty response for task {task_id}")
+
     return format_task(response.task)
 
 
@@ -484,6 +533,9 @@ def create_task(
 
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
+
+    if response.task is None:
+        raise RuntimeError("API returned empty response when creating task")
 
     return format_task(response.task)
 
@@ -651,6 +703,9 @@ def comment_task(
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
 
+    if response.task is None:
+        raise RuntimeError(f"API returned empty response for task {task_id}")
+
     return format_task(response.task)
 
 
@@ -798,6 +853,9 @@ def create_form_task(
 
     if hasattr(response, "error_code") and response.error_code:
         raise RuntimeError(f"API error: {response.error_code}")
+
+    if response.task is None:
+        raise RuntimeError(f"API returned empty response when creating form task {form_id}")
 
     return format_task(response.task)
 
@@ -1172,33 +1230,6 @@ def download_file(
     return result
 
 
-def _handle_upload_response(response, file_path: str) -> dict:
-    """
-    Validate upload response and extract result.
-
-    Centralizes response handling to ensure consistent error messages
-    and validation across upload_file() and upload_file_content().
-    """
-    # Validate response exists
-    if response is None:
-        raise RuntimeError(f"Upload failed for {file_path}: API returned no response")
-
-    # Check for API-level errors
-    if hasattr(response, "error_code") and response.error_code:
-        raise RuntimeError(f"API error: {response.error_code}")
-
-    # Validate required fields exist
-    if not hasattr(response, "guid") or not response.guid:
-        raise RuntimeError(
-            f"Upload failed for {file_path}: API response missing 'guid' field"
-        )
-
-    return {
-        "guid": response.guid,
-        "md5_hash": getattr(response, "md5_hash", None),
-    }
-
-
 @mcp.tool()
 def upload_file(file_path: str, account: str | None = None) -> dict:
     """
@@ -1209,38 +1240,25 @@ def upload_file(file_path: str, account: str | None = None) -> dict:
         account: Account key (optional, uses default if not specified).
 
     Returns:
-        Upload result with guid for use in attachments.
+        Upload result with guid, md5_hash, and filename for use in attachments.
 
     Note:
-        File versioning (root_id) is not supported by pyrus-api library.
-        Each upload creates a new file. Use attachment_id in comment_task()
-        to reference existing files if needed.
+        Uses direct HTTP with pyrus-api token due to bugs in pyrus-api upload.
     """
-    from json import JSONDecodeError
-
-    pyrus = get_client(account)
-
     # Validate file exists (expanduser handles ~/path)
     file_path_obj = Path(file_path).expanduser()
     if not file_path_obj.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    try:
-        response = pyrus.upload_file(str(file_path_obj))
-    except JSONDecodeError as e:
-        # pyrus-api returns empty/invalid JSON when upload fails silently
-        # (e.g., file rejected by server, endpoint issues)
-        logger.error(f"Upload failed for {file_path}: JSON decode error - {e}")
-        raise RuntimeError(
-            f"Upload failed: Pyrus returned invalid JSON response. "
-            f"This may indicate a server issue or the file was rejected. "
-            f"Error: {e}"
-        ) from e
-    except Exception as e:
-        logger.error(f"Upload failed for {file_path}: {e}")
-        raise
+    # Read file content
+    with open(file_path_obj, "rb") as f:
+        content = f.read()
 
-    return _handle_upload_response(response, file_path)
+    filename = file_path_obj.name
+    result = _upload_file_direct(content, filename, account)
+
+    logger.info(f"Uploaded file {filename}: guid={result['guid']}")
+    return result
 
 
 @mcp.tool()
@@ -1258,62 +1276,27 @@ def upload_file_content(
         account: Account key (optional, uses default if not specified).
 
     Returns:
-        Upload result with guid for use in attachments.
+        Upload result with guid, md5_hash, and filename for use in attachments.
+
+    Note:
+        Uses direct HTTP with pyrus-api token due to bugs in pyrus-api upload.
     """
     import base64
     import binascii
-    from json import JSONDecodeError
-
-    pyrus = get_client(account)
 
     # Decode base64 content
-    # Catch only binascii.Error (what base64.b64decode raises for invalid input)
-    # to avoid masking unrelated errors like MemoryError for huge payloads
     try:
         content = base64.b64decode(content_base64)
     except binascii.Error as e:
         raise ValueError(f"Invalid base64 content: {e}") from e
 
-    # Sanitize filename to prevent path traversal, preserve original name
-    # Using Path().name extracts just the filename without any directory components
+    # Sanitize filename to prevent path traversal
     safe_filename = Path(filename).name or "upload"
 
-    # Use a temp directory (not NamedTemporaryFile) so the file keeps its original name
-    # (pyrus-api uses the filename from the path when uploading to Pyrus)
-    tmp_dir = None
-    tmp_path = None
-    try:
-        tmp_dir = tempfile.mkdtemp(prefix="pyrus_upload_")
-        tmp_path = Path(tmp_dir) / safe_filename
-        tmp_path.write_bytes(content)
+    result = _upload_file_direct(content, safe_filename, account)
 
-        response = pyrus.upload_file(str(tmp_path))
-        return _handle_upload_response(response, filename)
-
-    except JSONDecodeError as e:
-        # pyrus-api returns empty/invalid JSON when upload fails silently
-        logger.error(f"Upload failed for {filename}: JSON decode error - {e}")
-        raise RuntimeError(
-            f"Upload failed: Pyrus returned invalid JSON response. "
-            f"This may indicate a server issue or the file was rejected. "
-            f"Error: {e}"
-        ) from e
-    except Exception as e:
-        logger.error(f"Upload failed for {filename}: {e}")
-        raise
-    finally:
-        # Clean up temp file and directory
-        # Cleanup errors are logged but don't fail the operation
-        if tmp_path and tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError as e:
-                logger.warning(f"Failed to clean up temp file {tmp_path}: {e}")
-        if tmp_dir:
-            try:
-                os.rmdir(tmp_dir)
-            except OSError as e:
-                logger.warning(f"Failed to clean up temp dir {tmp_dir}: {e}")
+    logger.info(f"Uploaded file {safe_filename}: guid={result['guid']}")
+    return result
 
 
 @mcp.tool()
